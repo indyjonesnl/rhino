@@ -1,7 +1,7 @@
 use clap::Parser;
 use rhino::{
-    MysqlBackend, MysqlConfig, PostgresBackend, PostgresConfig, RhinoServer, SqliteBackend,
-    SqliteConfig,
+    MysqlBackend, MysqlConfig, PostgresBackend, PostgresConfig, RedisBackend, RedisConfig,
+    RhinoServer, SqliteBackend, SqliteConfig,
 };
 use std::time::Duration;
 
@@ -60,6 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         };
         let backend = PostgresBackend::new(config).await?;
+        RhinoServer::new(backend)
+            .with_notify_interval(notify_interval)
+            .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+            .serve(&args.listen_address)
+            .await
+    } else if args.endpoint.starts_with("redis://") || args.endpoint.starts_with("rediss://") {
+        let config = RedisConfig {
+            dsn: args.endpoint,
+            compact_interval,
+            compact_min_retain: args.compact_retention,
+            ..Default::default()
+        };
+        let backend = RedisBackend::new(config).await?;
         RhinoServer::new(backend)
             .with_notify_interval(notify_interval)
             .with_emulated_etcd_version(args.emulated_etcd_version.clone())

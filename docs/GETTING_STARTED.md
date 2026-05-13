@@ -62,6 +62,12 @@ rhino-server --endpoint postgres://user:pass@localhost/kubernetes
 
 # MySQL
 rhino-server --endpoint mysql://root:root@localhost/kubernetes
+
+# Redis
+rhino-server --endpoint redis://127.0.0.1:6379
+
+# Redis with TLS
+rhino-server --endpoint rediss://127.0.0.1:6380
 ```
 
 All flags:
@@ -85,6 +91,10 @@ The container stores its database at `/data/db/state.db`. Override with argument
 # Use Postgres instead
 docker run -p 2379:2379 rhino \
   --endpoint postgres://user:pass@db-host/kubernetes
+
+# Use Redis instead
+docker run -p 2379:2379 rhino \
+  --endpoint redis://redis-host:6379
 ```
 
 ### Logging
@@ -148,6 +158,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     RhinoServer::new(backend).serve("0.0.0.0:2379").await
 }
 ```
+
+### Redis
+
+```rust
+use rhino::{RhinoServer, RedisBackend, RedisConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RedisConfig {
+        dsn: "redis://127.0.0.1:6379".to_string(),
+        ..Default::default()
+    };
+    let backend = RedisBackend::new(config).await?;
+    RhinoServer::new(backend).serve("0.0.0.0:2379").await
+}
+```
+
+Redis does not require any schema setup. Rhino creates all necessary keys automatically on first start.
 
 ### Custom configuration
 

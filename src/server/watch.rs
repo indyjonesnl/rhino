@@ -278,9 +278,15 @@ impl<B: Backend> Watch for KvBridge<B> {
                         tokio::spawn(async move {
                             let watch_result = match backend.watch(&key, start_revision).await {
                                 Ok(wr) => {
-                                    // Check if watch result indicates compacted revision
-                                    // (matching kine watch.go:160-166)
-                                    if wr.compact_revision != 0 {
+                                    // Only cancel if the requested start_revision falls
+                                    // below the compaction watermark (the backend already
+                                    // returns Err(Compacted) for the obvious case, but a
+                                    // race between the check and compaction running can
+                                    // leave compact_revision > start_revision here).
+                                    if wr.compact_revision != 0
+                                        && start_revision > 0
+                                        && start_revision <= wr.compact_revision
+                                    {
                                         let _ = resp_tx.send(Ok(WatchResponse {
                                             header: Some(ResponseHeader {
                                                 revision: wr.current_revision,

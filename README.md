@@ -1,14 +1,14 @@
 # Rhino
 
-**etcd, backed by SQL.**
+**etcd, backed by your database.**
 
-Rhino is a drop-in etcd v3 gRPC server written in Rust that stores everything in a relational database. Same API your tools already speak — simpler operations, no Raft consensus required.
+Rhino is a drop-in etcd v3 gRPC server written in Rust that stores everything in a relational database or Redis. Same API your tools already speak — simpler operations, no Raft consensus required.
 
 ## Why Rhino?
 
 Running etcd in production means managing a distributed consensus cluster: quorum maintenance, defragmentation, backup/restore choreography, and peer TLS. For many workloads — edge deployments, single-node clusters, CI environments, development — that complexity isn't justified.
 
-Rhino eliminates it. Your etcd clients connect to Rhino exactly as they would to etcd. Under the hood, every key-value mutation becomes a SQL row. You get the operational model of a relational database (backup with `pg_dump`, replicate with your existing tooling, inspect state with `SELECT *`) while keeping full etcd v3 API compatibility.
+Rhino eliminates it. Your etcd clients connect to Rhino exactly as they would to etcd. Under the hood, every key-value mutation becomes a row in your database or a Redis data structure. You get the operational model of a database you already know (backup with `pg_dump`, replicate with your existing tooling, inspect state with `SELECT *` or `redis-cli`) while keeping full etcd v3 API compatibility.
 
 ## Features
 
@@ -28,6 +28,7 @@ Rhino eliminates it. Your etcd clients connect to Rhino exactly as they would to
 | SQLite     | Ready   |
 | PostgreSQL | Ready   |
 | MySQL      | Ready   |
+| Redis      | Ready   |
 
 ## Quickstart
 
@@ -72,6 +73,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Or with Redis:
+
+```rust
+use rhino::{RhinoServer, RedisBackend, RedisConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RedisConfig {
+        dsn: "redis://127.0.0.1:6379".to_string(),
+        ..Default::default()
+    };
+
+    let backend = RedisBackend::new(config).await?;
+    let server = RhinoServer::new(backend);
+    server.serve("0.0.0.0:2379").await?;
+    Ok(())
+}
+```
+
 ### As a standalone server
 
 Build and run the included binary:
@@ -91,13 +111,17 @@ cargo run --bin rhino-server -- --endpoint postgres://user:pass@localhost/kubern
 
 # MySQL
 cargo run --bin rhino-server -- --endpoint mysql://root:root@localhost/kubernetes
+
+# Redis
+cargo run --bin rhino-server -- --endpoint redis://127.0.0.1:6379
 ```
 
 Options:
 
 ```
 --listen-address <ADDR>      gRPC listen address [default: 0.0.0.0:2379]
---endpoint <ENDPOINT>        File path for SQLite, postgres:// for PostgreSQL, mysql:// for MySQL [default: ./db/state.db]
+--endpoint <ENDPOINT>        File path for SQLite, postgres:// for PostgreSQL,
+                             mysql:// for MySQL, redis:// for Redis [default: ./db/state.db]
 --compact-interval <SECS>    Compaction interval in seconds, 0 to disable [default: 300]
 ```
 
@@ -171,6 +195,15 @@ etcdctl watch /myapp/ --prefix
 | `compact_batch_size` | `i64`      | 1000                                 | Rows processed per compaction batch    |
 | `max_connections`    | `u32`      | 5                                    | Maximum connections in the pool        |
 
+### RedisConfig
+
+| Field                | Type       | Default                      | Description                            |
+|----------------------|------------|------------------------------|----------------------------------------|
+| `dsn`                | `String`   | `redis://127.0.0.1:6379`    | Redis connection URL                   |
+| `compact_interval`   | `Duration` | 300 seconds                  | How often to run background compaction |
+| `compact_min_retain` | `i64`      | 1000                         | Minimum revisions to keep              |
+| `compact_batch_size` | `i64`      | 1000                         | Rows processed per compaction batch    |
+
 Set `compact_interval` to `Duration::ZERO` to disable automatic compaction on any backend.
 
 ## Documentation
@@ -185,10 +218,14 @@ Set `compact_interval` to `Duration::ZERO` to disable automatic compaction on an
 cargo test
 ```
 
-This runs the 16 SQLite backend tests using temporary databases — no external services needed. To also run the PostgreSQL tests, provide a connection string:
+This runs the 16 SQLite backend tests using temporary databases — no external services needed. To also run the PostgreSQL, MySQL, or Redis tests, provide connection details:
 
 ```sh
+# PostgreSQL
 RHINO_POSTGRES_DSN="postgres://postgres:postgres@localhost/rhino_test" cargo test
+
+# Redis (runs by default at localhost:6379; set SKIP_REDIS_TESTS=1 to skip)
+cargo test --test redis_backend -- --test-threads=1
 ```
 
 See **[docs/TESTING.md](docs/TESTING.md)** for the full testing guide: prerequisites, test inventory, how to write new tests, and smoke-testing with `etcdctl`.

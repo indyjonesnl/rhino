@@ -4,13 +4,13 @@ This document describes how Rhino is structured, how data flows through the syst
 
 ## Overview
 
-Rhino is a translation layer. It accepts etcd v3 gRPC requests, converts them into SQL operations, and returns etcd-compatible responses. It is not a database — it delegates storage entirely to a pluggable SQL backend.
+Rhino is a translation layer. It accepts etcd v3 gRPC requests, converts them into storage operations, and returns etcd-compatible responses. It is not a database — it delegates storage entirely to a pluggable backend.
 
 ```
-┌──────────────┐       gRPC v3        ┌──────────────┐         SQL          ┌──────────────────────┐
-│  etcd Client │  ──────────────────▶  │    Rhino     │  ──────────────────▶  │  SQLite / Postgres  │
-│  (K8s, etc.) │  ◀──────────────────  │  (API shim)  │  ◀──────────────────  │  / MySQL            │
-└──────────────┘                       └──────────────┘                       └──────────────────────┘
+┌──────────────┐       gRPC v3        ┌──────────────┐    SQL / Redis     ┌─────────────────────────────┐
+│  etcd Client │  ──────────────────▶  │    Rhino     │  ──────────────▶  │  SQLite / Postgres / MySQL  │
+│  (K8s, etc.) │  ◀──────────────────  │  (API shim)  │  ◀──────────────  │  / Redis                    │
+└──────────────┘                       └──────────────┘                    └─────────────────────────────┘
 ```
 
 ## Module Structure
@@ -25,7 +25,8 @@ src/
 │   ├── mod.rs
 │   ├── sqlite/mod.rs         # SQLite backend
 │   ├── postgres/mod.rs       # PostgreSQL backend
-│   └── mysql/mod.rs          # MySQL backend
+│   ├── mysql/mod.rs          # MySQL backend
+│   └── redis/mod.rs          # Redis backend
 └── server/
     ├── mod.rs                # RhinoServer, KvBridge, gRPC wiring
     ├── kv.rs                 # KV service (Range, Txn, Compact)
@@ -38,7 +39,7 @@ src/
 
 ### Backend Trait
 
-The `Backend` trait (`backend.rs`) defines 11 async methods that any storage driver must implement:
+The `Backend` trait (`backend.rs`) defines async methods that any storage driver must implement:
 
 | Method             | Purpose                                          |
 |--------------------|--------------------------------------------------|
@@ -66,7 +67,7 @@ All methods return `Result<T, BackendError>`. The error variants map directly to
 
 ## Data Model
 
-Rhino uses a single-table, log-structured schema compatible with [kine](https://github.com/k3s-io/kine). The exact DDL varies by backend, but the logical structure is the same:
+Rhino uses a log-structured storage model compatible with [kine](https://github.com/k3s-io/kine). The SQL backends use a single-table schema; the Redis backend maps the same logical model to Redis data structures. The logical structure is the same across all backends:
 
 ### Schema
 
@@ -121,15 +122,16 @@ Clients can read historical state by specifying a revision in `get()` or `list()
 
 ## List Query Strategy
 
-Each backend uses a different SQL strategy to efficiently find the latest version of each key:
+Each backend uses a different strategy to efficiently find the latest version of each key:
 
 | Backend    | Strategy                                                          |
 |------------|-------------------------------------------------------------------|
 | SQLite     | `JOIN (SELECT MAX(id) ... GROUP BY name)` — standard SQL subquery |
 | PostgreSQL | `DISTINCT ON (name) ... ORDER BY name, id DESC` — Postgres-specific optimization |
 | MySQL      | `JOIN (SELECT MAX(id) ... GROUP BY name)` — same as SQLite        |
+| Redis      | `{rhino}:current` hash maps each key name to its latest revision  |
 
-Both strategies produce the same result: for each key name matching the prefix, return only the row with the highest `id`.
+All strategies produce the same result: for each key name matching the prefix, return only the most recent version.
 
 ## Watch System
 
@@ -166,8 +168,9 @@ The compact DELETE query varies by backend:
 | SQLite     | `DELETE ... WHERE id IN (SELECT ... UNION SELECT ...)` |
 | PostgreSQL | `DELETE ... USING (...) AS ks WHERE kv.id = ks.id`    |
 | MySQL      | `DELETE kv FROM ... INNER JOIN (...) AS ks ON kv.id = ks.id` |
+| Redis      | Lua script removes superseded row hashes and updates sorted set indexes |
 
-After compaction, SQLite runs `PRAGMA wal_checkpoint(FULL)` to flush committed pages back to the database file. PostgreSQL and MySQL have no post-compact step.
+After compaction, SQLite runs `PRAGMA wal_checkpoint(FULL)` to flush committed pages back to the database file. PostgreSQL, MySQL, and Redis have no post-compact step.
 
 Manual compaction is also exposed via the `Compact` gRPC RPC.
 
@@ -212,6 +215,22 @@ This avoids the overhead of a generic transaction engine while handling the patt
 - Start key translation: `\x00` replaced with `#` (MySQL latin1 collation limitation)
 - Unique violation detected via MySQL error code `1062`
 - Index creation ignores error `1061` (duplicate key name) for idempotent setup
+
+### Redis
+
+- All data stored in Redis data structures instead of SQL tables
+- Row data stored as hashes at `{rhino}:row:{id}` with the same logical columns (name, created, deleted, create_revision, prev_revision, lease, value, old_value)
+- Revision counter uses atomic `INCR` on `{rhino}:rev`
+- Current key index stored as a hash at `{rhino}:current` mapping key name to latest revision
+- Per-key revision history tracked in sorted sets at `{rhino}:key:{name}` for historical queries
+- Lexicographic key index at `{rhino}:names` enables prefix scans
+- All keys use the `{rhino}` hash tag for Redis Cluster compatibility (all data colocates on one hash slot)
+- All mutating operations (create, update, delete, delete_prefix) implemented as atomic Lua scripts
+- Unique constraint enforcement via ephemeral keys at `{rhino}:uniq:{name}:{prev_rev}`
+- Uses `redis::aio::ConnectionManager` for async connection pooling
+- Handles both RESP2 (arrays) and RESP3 (maps) protocol variants automatically
+- Gap fill inserts placeholder records the same way as SQL backends
+- `db_size()` reports memory usage via Redis `INFO memory` command
 
 ## Error Mapping
 
