@@ -194,10 +194,7 @@ async fn test_backend_list() {
     let (_, ents) = b.list("/test/", "", 0, base_rev + 3, false).await.unwrap();
     assert_eq!(ents.len(), 3);
     assert_keys_sorted(&ents);
-    assert_eq_keys(
-        &["/test/a", "/test/a/b/c", "/test/b"],
-        &ents,
-    );
+    assert_eq_keys(&["/test/a", "/test/a/b/c", "/test/b"], &ents);
 
     // List with a limit.
     let (_, ents) = b.list("/test/", "", 4, 0, false).await.unwrap();
@@ -230,7 +227,12 @@ async fn test_backend_watch() {
             _ => break,
         }
     }
-    assert_eq!(all_events.len(), 5, "should receive 5 events, got {}", all_events.len());
+    assert_eq!(
+        all_events.len(),
+        5,
+        "should receive 5 events, got {}",
+        all_events.len()
+    );
 
     // Watch with prefix — only /test/a/1 events (create + update = 2).
     let wr = b.watch("/test/a/", base_rev + 1).await.unwrap();
@@ -244,7 +246,12 @@ async fn test_backend_watch() {
             _ => break,
         }
     }
-    assert_eq!(prefix_events.len(), 2, "should receive 2 prefix-filtered events, got {}", prefix_events.len());
+    assert_eq!(
+        prefix_events.len(),
+        2,
+        "should receive 2 prefix-filtered events, got {}",
+        prefix_events.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -273,10 +280,7 @@ async fn test_create_after_delete() {
     backend.delete("/test/recreate", rev).await.unwrap();
 
     // Should be able to create again after delete.
-    let rev2 = backend
-        .create("/test/recreate", b"v2", 0)
-        .await
-        .unwrap();
+    let rev2 = backend.create("/test/recreate", b"v2", 0).await.unwrap();
     assert!(rev2 > rev);
 
     let (_, kv) = backend
@@ -380,7 +384,11 @@ async fn test_watch_sees_updates_and_deletes() {
         }
     }
 
-    assert!(all_events.len() >= 2, "expected at least 2 events, got {}", all_events.len());
+    assert!(
+        all_events.len() >= 2,
+        "expected at least 2 events, got {}",
+        all_events.len()
+    );
 
     // Verify we got both an update event and a delete event (order depends on poll batching).
     let has_update = all_events.iter().any(|e| !e.delete && e.kv.value == b"v2");
@@ -498,14 +506,32 @@ async fn test_compact_does_not_delete_live_keys() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Create several keys (like Kubernetes bootstrap).
-    backend.create("/registry/ns/default", b"ns1", 0).await.unwrap();
-    backend.create("/registry/ns/kube-system", b"ns2", 0).await.unwrap();
-    backend.create("/registry/ns/kube-public", b"ns3", 0).await.unwrap();
-    backend.create("/registry/sa/default", b"sa1", 0).await.unwrap();
-    backend.create("/registry/sa/kube-system", b"sa2", 0).await.unwrap();
+    backend
+        .create("/registry/ns/default", b"ns1", 0)
+        .await
+        .unwrap();
+    backend
+        .create("/registry/ns/kube-system", b"ns2", 0)
+        .await
+        .unwrap();
+    backend
+        .create("/registry/ns/kube-public", b"ns3", 0)
+        .await
+        .unwrap();
+    backend
+        .create("/registry/sa/default", b"sa1", 0)
+        .await
+        .unwrap();
+    backend
+        .create("/registry/sa/kube-system", b"sa2", 0)
+        .await
+        .unwrap();
 
     // Generate enough revisions to push past compact_min_retain.
-    let r = backend.create("/registry/padding/key", b"v0", 0).await.unwrap();
+    let r = backend
+        .create("/registry/padding/key", b"v0", 0)
+        .await
+        .unwrap();
     let mut rev = r;
     for i in 1..=20 {
         let val = format!("v{i}");
@@ -535,11 +561,21 @@ async fn test_compact_does_not_delete_live_keys() {
     }
 
     // List must return all namespace keys.
-    let (_, kvs) = backend.list("/registry/ns/", "", 0, 0, false).await.unwrap();
-    assert_eq!(kvs.len(), 3, "all 3 namespace keys should survive compaction");
+    let (_, kvs) = backend
+        .list("/registry/ns/", "", 0, 0, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        kvs.len(),
+        3,
+        "all 3 namespace keys should survive compaction"
+    );
 
     // The padding key should have latest value.
-    let (_, kv) = backend.get("/registry/padding/key", "", 0, 0, false).await.unwrap();
+    let (_, kv) = backend
+        .get("/registry/padding/key", "", 0, 0, false)
+        .await
+        .unwrap();
     assert_eq!(kv.unwrap().value, b"v20");
 }
 
@@ -586,7 +622,10 @@ async fn test_compact_removes_deleted_keys_from_kine_current() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(row.0, 0, "kine_current should not have entry for deleted+compacted key");
+    assert_eq!(
+        row.0, 0,
+        "kine_current should not have entry for deleted+compacted key"
+    );
     pool.close().await;
 }
 
@@ -670,7 +709,10 @@ async fn test_count_current_revision() {
 
     // Delete one.
     let (_, kv) = backend.get("/cnt/b", "", 0, 0, false).await.unwrap();
-    backend.delete("/cnt/b", kv.unwrap().mod_revision).await.unwrap();
+    backend
+        .delete("/cnt/b", kv.unwrap().mod_revision)
+        .await
+        .unwrap();
 
     let (_, count) = backend.count("/cnt/", "", 0).await.unwrap();
     assert_eq!(count, 2);
@@ -843,10 +885,7 @@ async fn test_prev_revision_zero_for_new_keys() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(
-        row.0, 0,
-        "prev_revision for a brand-new key must be 0"
-    );
+    assert_eq!(row.0, 0, "prev_revision for a brand-new key must be 0");
     pool.close().await;
 }
 
@@ -887,8 +926,5 @@ fn assert_keys_sorted(kvs: &[rhino::KeyValue]) {
 
 fn assert_eq_keys(expected: &[&str], kvs: &[rhino::KeyValue]) {
     let got: Vec<&str> = kvs.iter().map(|kv| kv.key.as_str()).collect();
-    assert_eq!(
-        expected, &got[..],
-        "key mismatch"
-    );
+    assert_eq!(expected, &got[..], "key mismatch");
 }
