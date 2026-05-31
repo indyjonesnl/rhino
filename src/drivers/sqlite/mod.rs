@@ -546,7 +546,13 @@ impl SqliteBackend {
         let kv = KeyValue {
             key: name.clone(),
             value,
-            version: 0,
+            // etcd `version` is 1 on a key's first creation, >1 on updates.
+            // Watch consumers (e.g. the rusternetes api-server) map version==1
+            // -> ADDED, otherwise MODIFIED, so it MUST be set on watch events;
+            // a hardcoded 0 makes every create look like an update. The exact
+            // update count isn't tracked in the streaming path — any value >1
+            // correctly reads as "not a create".
+            version: if is_create { 1 } else { 2 },
             create_revision: actual_create_rev,
             mod_revision,
             lease,
@@ -558,7 +564,7 @@ impl SqliteBackend {
             Some(KeyValue {
                 key: name,
                 value: old_value,
-                version: 0,
+                version: 1,
                 create_revision: actual_create_rev,
                 mod_revision: prev_revision,
                 lease,
@@ -1436,7 +1442,12 @@ impl Backend for SqliteBackend {
                             kv: KeyValue {
                                 key: name.clone(),
                                 value,
-                                version: 0,
+                                // version==1 marks a create; >1 an update. See
+                                // row_to_event_poll for why this MUST be set
+                                // (consumers map version==1 -> ADDED). Historical
+                                // replay needs it too: watches starting from a
+                                // past revision replay creates as ADDED.
+                                version: if is_create { 1 } else { 2 },
                                 create_revision: actual_create_rev,
                                 mod_revision,
                                 lease,
@@ -1447,7 +1458,7 @@ impl Backend for SqliteBackend {
                                 Some(KeyValue {
                                     key: name,
                                     value: old_value,
-                                    version: 0,
+                                    version: 1,
                                     create_revision: actual_create_rev,
                                     mod_revision: prev_revision,
                                     lease,

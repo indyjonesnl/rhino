@@ -358,6 +358,51 @@ async fn test_watch_live_events() {
     assert_eq!(events[0].kv.value, b"hello");
 }
 
+/// Watch events must carry the etcd `version` field so clients can tell a
+/// create from an update. etcd sets version==1 on a key's first creation and
+/// increments it on updates; consumers (e.g. the rusternetes api-server) map
+/// version==1 -> ADDED, otherwise MODIFIED. A hardcoded version of 0 makes
+/// every create look like a MODIFIED, breaking watch semantics.
+#[tokio::test]
+async fn test_watch_event_version_marks_create_vs_update() {
+    let (backend, _dir) = test_backend().await;
+
+    let current_rev = backend.current_revision().await.unwrap();
+    let watch_result = backend.watch("/ver/", current_rev + 1).await.unwrap();
+    let mut rx = watch_result.events;
+
+    let rev = backend.create("/ver/k", b"v1", 0).await.unwrap();
+    backend.update("/ver/k", b"v2", rev, 0).await.unwrap();
+
+    // Collect both events (poll loop may batch them).
+    let mut all = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while all.len() < 2 && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(1500), rx.recv()).await {
+            Ok(Some(batch)) => all.extend(batch),
+            _ => break,
+        }
+    }
+
+    let create_ev = all
+        .iter()
+        .find(|e| e.kv.key == "/ver/k" && e.create)
+        .expect("create event");
+    assert_eq!(
+        create_ev.kv.version, 1,
+        "freshly-created key must have version==1 (maps to ADDED)"
+    );
+
+    let update_ev = all
+        .iter()
+        .find(|e| e.kv.key == "/ver/k" && !e.create && !e.delete)
+        .expect("update event");
+    assert_ne!(
+        update_ev.kv.version, 1,
+        "an update must not have version==1 (would be misread as ADDED)"
+    );
+}
+
 #[tokio::test]
 async fn test_watch_sees_updates_and_deletes() {
     let (backend, _dir) = test_backend().await;
