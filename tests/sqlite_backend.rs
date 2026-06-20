@@ -973,3 +973,52 @@ fn assert_eq_keys(expected: &[&str], kvs: &[rhino::KeyValue]) {
     let got: Vec<&str> = kvs.iter().map(|kv| kv.key.as_str()).collect();
     assert_eq!(expected, &got[..], "key mismatch");
 }
+
+/// Regression: read-after-delete consistency under concurrent load.
+///
+/// `insert` appends the new revision row and repoints `kine_current` in one
+/// transaction. Previously these were two independently auto-committed
+/// statements on two pooled connections, leaving a window in which the new
+/// (tombstone) row was committed but `kine_current` still pointed at the live
+/// row — a reader joining through `kine_current` then saw the deleted object as
+/// still present. This drove the flaky `[sig-api-machinery] ResourceQuota ...
+/// lifecycle` conformance failure (GET after DeleteCollection returned 200).
+///
+/// Many concurrent create→delete cycles across distinct keys exercise the
+/// multi-connection pool; after each `delete` reports success, an immediate
+/// `get` (current revision, excluding deleted) MUST report the key gone.
+#[tokio::test]
+async fn test_read_after_delete_consistency_concurrent() {
+    use std::sync::Arc;
+
+    let (b, _dir) = test_backend().await;
+    let b = Arc::new(b);
+
+    const TASKS: usize = 8;
+    const ITERS: usize = 50;
+
+    let mut handles = Vec::new();
+    for t in 0..TASKS {
+        let b = b.clone();
+        handles.push(tokio::spawn(async move {
+            for i in 0..ITERS {
+                let key = format!("/registry/quota/ns{t}/q{i}");
+                let rev = b.create(&key, b"v", 0).await.unwrap();
+                let (_r, _prev, ok) = b.delete(&key, rev).await.unwrap();
+                assert!(ok, "delete must succeed for {key}");
+
+                // Immediately after a confirmed delete, the current-revision
+                // GET must not see the object (read-after-write).
+                let (_g, ent) = b.get(&key, "", 0, 0, false).await.unwrap();
+                assert!(
+                    ent.is_none(),
+                    "GET after delete returned a live row for {key}: {ent:?}"
+                );
+            }
+        }));
+    }
+
+    for h in handles {
+        h.await.unwrap();
+    }
+}
