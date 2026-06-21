@@ -30,3 +30,10 @@ tempfile = "3"
 
 [build-dependencies]
 tonic-build = "0.12"
+
+# Vendored, lightly-patched h2: tolerate a malformed HTTP/2 :authority (drop it
+# instead of RST_STREAM/PROTOCOL_ERROR) so etcd v3.5 clients that send
+# ":authority: #initially=[...]" (e.g. k0s's kube-apiserver) can talk to rhino,
+# matching Go grpc-server leniency. See third_party/h2/src/server.rs.
+[patch.crates-io]
+h2 = { path = "third_party/h2" }
