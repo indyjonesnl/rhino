@@ -1,20 +1,12 @@
-FROM rust:1.84-bookworm AS builder
+FROM rustlang/rust:nightly-bookworm AS builder
 
 WORKDIR /build
 
 # Install protobuf compiler (needed by tonic-build)
 RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
-# Cache dependency builds: copy manifests first, then build deps
-COPY Cargo.toml Cargo.lock build.rs ./
-COPY proto/ proto/
-RUN mkdir -p src/bin && \
-    echo 'fn main() {}' > src/bin/server.rs && \
-    echo 'pub fn unused() {}' > src/lib.rs && \
-    cargo build --release --bin rhino-server 2>/dev/null || true
-
-# Copy actual source and rebuild
-COPY src/ src/
+# Copy all source and build
+COPY . .
 RUN cargo build --release --bin rhino-server
 
 FROM debian:bookworm-slim
