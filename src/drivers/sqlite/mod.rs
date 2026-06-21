@@ -248,6 +248,23 @@ impl SqliteBackend {
         let c = if create { 1i32 } else { 0 };
         let d = if delete { 1i32 } else { 0 };
 
+        // Append the new revision row AND repoint kine_current in a SINGLE
+        // transaction on ONE connection. These were previously two separate
+        // `execute(&self.pool)` calls, each grabbing its own pooled connection
+        // and auto-committing independently. That left a window in which the
+        // new kine row was committed but kine_current still pointed at the
+        // PREVIOUS revision — so a concurrent reader joining through
+        // kine_current saw the stale row. For a delete (tombstone insert) that
+        // window let a GET issued microseconds after the delete still return
+        // the object (etcd/kine require read-after-write here). Wrapping both
+        // statements in one transaction makes the repoint atomic: a reader sees
+        // either the old revision or the new one, never a half-applied state.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| BackendError::Internal(e.to_string()))?;
+
         let result = sqlx::query(
             "INSERT INTO kine(name, created, deleted, create_revision, prev_revision, lease, value, old_value)
              VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
@@ -260,7 +277,7 @@ impl SqliteBackend {
         .bind(lease)
         .bind(value)
         .bind(old_value)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| {
             // SQLite UNIQUE constraint violation → key already exists
@@ -281,9 +298,13 @@ impl SqliteBackend {
         )
         .bind(key)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| BackendError::Internal(format!("kine_current update failed: {e}")))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| BackendError::Internal(format!("insert commit failed: {e}")))?;
 
         self.current_rev.store(id, Ordering::Release);
         self.notify.notify_waiters();
