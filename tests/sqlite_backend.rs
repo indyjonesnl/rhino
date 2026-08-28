@@ -519,6 +519,100 @@ async fn test_compact_removes_old_rows() {
     pool.close().await;
 }
 
+/// Background compaction must clear the whole backlog, not one batch per pass.
+///
+/// `compact_once` breaks the work into `compact_batch_size` batches and guards
+/// each batch with "has anyone else moved compact_rev_key?". That guard used to
+/// compare against the value read *before* the loop, so the first batch's own
+/// UPDATE made the second iteration mismatch and return `Err(Compacted)` — which
+/// `compact_loop` treats as a normal outcome. Compaction therefore advanced
+/// exactly `compact_batch_size` revisions per interval no matter how far behind
+/// it was, silently.
+///
+/// Measured on a live 2-node cluster before the fix: `compact_rev_key` advanced
+/// 21000 -> 22000 over one interval while `max(id)` sat at ~37000 — a backlog of
+/// ~16k revisions against a 1000-revision retention target, with no error logged.
+///
+/// Here: 60 revisions, retain 5, batch 10. One pass must reach the target
+/// (~55 revisions compacted, needing 6 batches), not stop after the first 10.
+#[tokio::test]
+async fn test_compact_once_advances_past_first_batch() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("compact_batches.db");
+    let dsn = db_path.to_string_lossy().to_string();
+
+    let config = SqliteConfig {
+        dsn: dsn.clone(),
+        compact_interval: Duration::ZERO, // drive compaction by hand
+        compact_min_retain: 5,
+        compact_batch_size: 10,
+        ..Default::default()
+    };
+    let backend = SqliteBackend::new(config).await.unwrap();
+    backend.start().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 60 superseded revisions of one key, so the backlog spans six batches.
+    let mut rev = backend.create("/batch/k", b"v0", 0).await.unwrap();
+    for i in 1..=60 {
+        let val = format!("v{i}");
+        let (new_rev, _, ok) = backend
+            .update("/batch/k", val.as_bytes(), rev, 0)
+            .await
+            .unwrap();
+        assert!(ok, "update {i} should succeed");
+        rev = new_rev;
+    }
+
+    let pool = sqlx::sqlite::SqlitePool::connect(&format!("sqlite:{dsn}"))
+        .await
+        .unwrap();
+    let compact_rev_before: (Option<i64>,) =
+        sqlx::query_as("SELECT MAX(prev_revision) FROM kine WHERE name = 'compact_rev_key'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let before = compact_rev_before.0.unwrap_or(0);
+
+    // ONE pass. Do NOT unwrap: in production `compact_loop` treats
+    // Err(Compacted) as a normal outcome, which is exactly why a compactor
+    // stuck after its first batch produced no log line and no metric. Capture
+    // it so the assertion below can report it.
+    let pass = backend.compact_once().await;
+
+    let compact_rev_after: (Option<i64>,) =
+        sqlx::query_as("SELECT MAX(prev_revision) FROM kine WHERE name = 'compact_rev_key'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let after = compact_rev_after.0.unwrap_or(0);
+
+    let current = backend.current_revision().await.unwrap();
+    let target = current - 5; // compact_min_retain
+    let advanced = after - before;
+
+    assert!(
+        advanced > 10,
+        "one compaction pass advanced only {advanced} revisions ({before} -> {after}); \
+         it stopped after the first batch of 10, so a backlog can never be cleared. \
+         target was {target} (current {current}); pass returned {pass:?}"
+    );
+    assert_eq!(
+        after, target,
+        "one pass should reach the retention target: got {after}, want {target}"
+    );
+
+    // The live key must survive all of that.
+    let (_, kv) = backend.get("/batch/k", "", 0, 0, false).await.unwrap();
+    let kv = kv.unwrap();
+    assert_eq!(
+        kv.value, b"v60",
+        "compaction must not touch the live revision"
+    );
+
+    pool.close().await;
+}
+
 #[tokio::test]
 async fn test_db_size() {
     let (backend, _dir) = test_backend().await;
