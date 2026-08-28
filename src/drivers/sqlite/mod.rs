@@ -945,8 +945,15 @@ impl SqliteBackend {
         }
     }
 
-    /// Run a single compaction pass.
-    async fn compact_once(&self) -> Result<()> {
+    /// Run a single compaction pass: compact down to
+    /// `current_revision - compact_min_retain`, in `compact_batch_size` batches,
+    /// then checkpoint the WAL and reclaim free pages.
+    ///
+    /// This is what [`Self::compact_loop`] calls on every tick. It is public so
+    /// the batched path can be tested directly and so operators can force a pass
+    /// — the trait-level `compact(revision)` is a separate, single-statement
+    /// implementation and does **not** exercise this loop.
+    pub async fn compact_once(&self) -> Result<()> {
         let compact_rev = self.get_compact_revision().await?;
         let current_rev = self.cached_revision().await?;
 
@@ -958,7 +965,16 @@ impl SqliteBackend {
             target = 0;
         }
 
-        // Break into batches
+        // Break into batches.
+        //
+        // `observed_rev` is what we believe the DB's compact_rev_key holds. It
+        // starts at the value we read and advances with every batch we commit ourselves.
+        // Comparing the guard below against the pre-loop `compact_rev` instead
+        // made the second iteration always mismatch — because the first batch's
+        // own UPDATE had moved it — so compaction advanced exactly one batch per
+        // interval and the miss was invisible (compact_loop treats
+        // Err(Compacted) as a normal outcome).
+        let mut observed_rev = compact_rev;
         let mut iter_rev = compact_rev;
         while iter_rev < target {
             iter_rev += self.config.compact_batch_size;
@@ -972,14 +988,15 @@ impl SqliteBackend {
                 .await
                 .map_err(|e| BackendError::Internal(e.to_string()))?;
 
-            // Verify compact_rev hasn't changed (another compactor may have run)
+            // Verify no OTHER compactor has moved compact_rev_key since we last
+            // wrote it. Our own previous batch is not a conflict.
             let db_compact: (Option<i64>,) =
                 sqlx::query_as("SELECT MAX(prev_revision) FROM kine WHERE name = ?")
                     .bind(COMPACT_REV_KEY)
                     .fetch_one(&mut *tx)
                     .await
                     .map_err(|e| BackendError::Internal(e.to_string()))?;
-            if db_compact.0.unwrap_or(0) != compact_rev {
+            if db_compact.0.unwrap_or(0) != observed_rev {
                 return Err(BackendError::Compacted);
             }
 
@@ -1032,6 +1049,7 @@ impl SqliteBackend {
             tx.commit()
                 .await
                 .map_err(|e| BackendError::Internal(e.to_string()))?;
+            observed_rev = iter_rev;
 
             debug!(
                 "compacted {} rows up to revision {}/{}",
