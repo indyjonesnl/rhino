@@ -1116,3 +1116,37 @@ async fn test_read_after_delete_consistency_concurrent() {
         h.await.unwrap();
     }
 }
+
+/// `current_revision()` must never be below a revision whose create has
+/// already returned to its caller. `insert` used to `store(id)` AFTER commit,
+/// outside the write lock, so with concurrent writers the committer of id N
+/// could overwrite the cache with N after the committer of N+1 had stored
+/// N+1. A list/watch-list that uses `current_revision()` as its snapshot cut
+/// then misses the object at N+1 (it is above the cut yet was already
+/// broadcast), so the api-server never delivers it (rusternetes #3071).
+#[tokio::test]
+async fn test_current_revision_is_monotonic_under_concurrent_writers() {
+    let (b, _dir) = test_backend().await;
+    let b = std::sync::Arc::new(b);
+
+    for round in 0..300 {
+        let mut tasks = Vec::new();
+        for w in 0..8 {
+            let b = b.clone();
+            tasks.push(tokio::spawn(async move {
+                b.create(&format!("/mono/{round}/{w}"), &[], 0)
+                    .await
+                    .unwrap()
+            }));
+        }
+        let mut max_rev = 0;
+        for t in tasks {
+            max_rev = max_rev.max(t.await.unwrap());
+        }
+        let cur = b.current_revision().await.unwrap();
+        assert!(
+            cur >= max_rev,
+            "round {round}: current_revision {cur} regressed below committed revision {max_rev}"
+        );
+    }
+}
