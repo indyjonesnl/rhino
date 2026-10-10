@@ -1429,7 +1429,7 @@ impl Backend for RedisBackend {
     async fn start(&self) -> Result<()> {
         // Sync cached revision from Redis (handles both fresh start and restart)
         let rev = self.db_current_revision().await?;
-        self.current_rev.store(rev, Ordering::Release);
+        self.current_rev.fetch_max(rev, Ordering::AcqRel);
 
         // Create health check key (idempotent via atomic create script)
         match self
@@ -1483,7 +1483,7 @@ impl Backend for RedisBackend {
                 }
             })?;
 
-        self.current_rev.store(id, Ordering::Release);
+        self.current_rev.fetch_max(id, Ordering::AcqRel);
         self.notify.notify_waiters();
         Ok(id)
     }
@@ -1529,7 +1529,7 @@ impl Backend for RedisBackend {
                 }
             }
             1 => {
-                self.current_rev.store(rev, Ordering::Release);
+                self.current_rev.fetch_max(rev, Ordering::AcqRel);
                 self.notify.notify_waiters();
                 Ok((
                     rev,
@@ -1577,7 +1577,7 @@ impl Backend for RedisBackend {
             return Ok((rev, 0, Vec::new()));
         }
 
-        self.current_rev.store(last_rev, Ordering::Release);
+        self.current_rev.fetch_max(last_rev, Ordering::AcqRel);
         self.notify.notify_waiters();
 
         // Parse prev_kvs from flattened result:
@@ -1691,7 +1691,7 @@ impl Backend for RedisBackend {
             ));
         }
 
-        self.current_rev.store(new_rev, Ordering::Release);
+        self.current_rev.fetch_max(new_rev, Ordering::AcqRel);
         self.notify.notify_waiters();
 
         Ok((

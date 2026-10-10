@@ -188,7 +188,7 @@ impl MysqlBackend {
         })?;
 
         let id = result.last_insert_id() as i64;
-        self.current_rev.store(id, Ordering::Release);
+        self.current_rev.fetch_max(id, Ordering::AcqRel);
         self.notify.notify_waiters();
         Ok(id)
     }
