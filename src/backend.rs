@@ -97,6 +97,21 @@ pub trait Backend: Send + Sync + 'static {
     /// Return the size of the database in bytes.
     async fn db_size(&self) -> Result<i64>;
 
+    /// Start the background poll, compaction and TTL tasks now instead of on the
+    /// first `watch` (kine's `startWatch`). A consumer that never calls `watch`
+    /// (an in-process event bus in front of the backend) would otherwise never
+    /// have leased keys reaped. Idempotent; default is a no-op.
+    async fn start_background(&self) {}
+
+    /// Subscribe to the keys the TTL loop reaps, as `delete` events carrying the
+    /// pre-delete value in `prev_kv`. kine/etcd surface lease expiry as ordinary
+    /// DELETE watch events; a caller that serves watches from its own bus
+    /// (rather than `watch`) needs this to see them. `None` when the backend has
+    /// no TTL loop.
+    fn subscribe_expired(&self) -> Option<tokio::sync::broadcast::Receiver<Event>> {
+        None
+    }
+
     /// Return the current revision.
     async fn current_revision(&self) -> Result<i64>;
 

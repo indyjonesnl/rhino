@@ -52,12 +52,15 @@ const UNIQ_PREFIX: &str = "{rhino}:uniq:";
 /// Slow subscribers are disconnected (channel dropped) rather than lagging.
 struct Broadcaster {
     subscribers: Mutex<Vec<mpsc::Sender<Arc<Vec<Event>>>>>,
+    /// Keys reaped by the TTL loop (see `Backend::subscribe_expired`).
+    expired: tokio::sync::broadcast::Sender<Event>,
 }
 
 impl Broadcaster {
     fn new() -> Self {
         Self {
             subscribers: Mutex::new(Vec::new()),
+            expired: tokio::sync::broadcast::channel(1024).0,
         }
     }
 
@@ -1113,9 +1116,21 @@ impl RedisBackend {
 
                     for (key, mod_rev) in expired {
                         match self.delete(&key, mod_rev).await {
-                            Ok((_, _, true)) => {
+                            Ok((rev, prev, true)) => {
                                 trace!("ttl: deleted expired key {key}");
                                 expiries.remove(&key);
+                                if let Some(prev) = prev {
+                                    // No receiver is fine (Err ignored).
+                                    let _ = self.broadcaster.expired.send(Event {
+                                        delete: true,
+                                        create: false,
+                                        kv: KeyValue {
+                                            mod_revision: rev,
+                                            ..prev.clone()
+                                        },
+                                        prev_kv: Some(prev),
+                                    });
+                                }
                             }
                             Ok((_, _, false)) => {
                                 expiries.remove(&key);
@@ -1820,6 +1835,14 @@ impl Backend for RedisBackend {
         }
 
         Ok(0)
+    }
+
+    async fn start_background(&self) {
+        self.ensure_background_tasks();
+    }
+
+    fn subscribe_expired(&self) -> Option<tokio::sync::broadcast::Receiver<Event>> {
+        Some(self.broadcaster.expired.subscribe())
     }
 
     async fn current_revision(&self) -> Result<i64> {
