@@ -1210,3 +1210,59 @@ async fn busy_timeout_is_honoured_under_write_lock() {
         .await
         .expect("write succeeds once the lock is released");
 }
+
+#[tokio::test]
+async fn test_compact_revision_tracks_compaction() {
+    let dir = TempDir::new().unwrap();
+    let b = SqliteBackend::new(SqliteConfig {
+        dsn: dir.path().join("cr.db").to_string_lossy().to_string(),
+        compact_interval: Duration::ZERO,
+        compact_min_retain: 0,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    b.start().await.unwrap();
+
+    let before = b.compact_revision().await.unwrap();
+    let mut rev = 0;
+    for i in 0..5 {
+        rev = b.create(&format!("/cr/{i}"), &[], 0).await.unwrap();
+    }
+    // Nothing compacted yet: the whole history is backlog.
+    assert_eq!(b.compact_revision().await.unwrap(), before);
+    assert_eq!(b.current_revision().await.unwrap(), rev);
+
+    b.compact(rev - 2).await.unwrap();
+    assert_eq!(b.compact_revision().await.unwrap(), rev - 2);
+}
+
+#[tokio::test]
+async fn test_metrics_endpoint_serves_backlog() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (b, _dir) = test_backend().await;
+    let b = std::sync::Arc::new(b);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(rhino::metrics::serve(b.clone(), listener));
+
+    let get = |path: &'static str| async move {
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        out
+    };
+
+    let head = b.current_revision().await.unwrap();
+    let body = get("/metrics").await;
+    assert!(body.starts_with("HTTP/1.1 200"), "{body}");
+    assert!(
+        body.contains(&format!("rhino_current_revision {head}\n")),
+        "{body}"
+    );
+    assert!(body.contains("rhino_compaction_backlog "), "{body}");
+    assert!(get("/nope").await.starts_with("HTTP/1.1 404"));
+}

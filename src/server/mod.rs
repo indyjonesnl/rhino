@@ -26,6 +26,7 @@ pub struct RhinoServer<B: Backend> {
     backend: Arc<B>,
     notify_interval: Duration,
     emulated_etcd_version: String,
+    metrics_address: Option<String>,
 }
 
 impl<B: Backend> RhinoServer<B> {
@@ -34,7 +35,15 @@ impl<B: Backend> RhinoServer<B> {
             backend: Arc::new(backend),
             notify_interval: DEFAULT_NOTIFY_INTERVAL,
             emulated_etcd_version: DEFAULT_EMULATED_VERSION.to_string(),
+            metrics_address: None,
         }
+    }
+
+    /// Serve compaction gauges at `/metrics` on this address (off by default).
+    pub fn with_metrics_address(mut self, addr: impl Into<String>) -> Self {
+        let addr = addr.into();
+        self.metrics_address = (!addr.is_empty()).then_some(addr);
+        self
     }
 
     /// Set the watch progress notify interval.
@@ -57,6 +66,11 @@ impl<B: Backend> RhinoServer<B> {
             .start()
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+
+        if let Some(maddr) = &self.metrics_address {
+            let listener = tokio::net::TcpListener::bind(maddr).await?;
+            tokio::spawn(crate::metrics::serve(self.backend.clone(), listener));
+        }
 
         let bridge = KvBridge::new(
             self.backend.clone(),

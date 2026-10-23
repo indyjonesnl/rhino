@@ -115,6 +115,11 @@ pub trait Backend: Send + Sync + 'static {
     /// Return the current revision.
     async fn current_revision(&self) -> Result<i64>;
 
+    /// Return the compact revision: the highest revision compaction has
+    /// reached. `current_revision() - compact_revision()` is the compaction
+    /// backlog.
+    async fn compact_revision(&self) -> Result<i64>;
+
     /// Block until the poll loop has processed all rows up to (and including) the given revision.
     /// This ensures that any events at or below `revision` have been broadcast to watchers.
     async fn wait_for_sync_to(&self, revision: i64);

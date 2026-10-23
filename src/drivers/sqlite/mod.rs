@@ -1595,6 +1595,10 @@ impl Backend for SqliteBackend {
         Some(self.broadcaster.expired.subscribe())
     }
 
+    async fn compact_revision(&self) -> Result<i64> {
+        self.get_compact_revision().await
+    }
+
     async fn current_revision(&self) -> Result<i64> {
         self.cached_revision().await
     }
