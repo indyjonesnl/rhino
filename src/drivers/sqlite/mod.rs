@@ -25,6 +25,8 @@ const COMPACT_MIN_RETAIN: i64 = 1000;
 const COMPACT_BATCH_SIZE: i64 = 1000;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const COMPACT_INTERVAL: Duration = Duration::from_secs(300);
+/// kine `pkg/drivers/sqlite/sqlite.go` DefaultParams: `_busy_timeout=30000`.
+const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Configuration for the SQLite backend.
 #[derive(Debug, Clone)]
@@ -40,6 +42,10 @@ pub struct SqliteConfig {
     /// Maximum number of connections in the pool. Defaults to 5.
     /// SQLite serializes writes, so large pools just increase lock contention.
     pub max_connections: u32,
+    /// How long a connection waits on a locked database before failing with
+    /// `SQLITE_BUSY` ("database is locked"). Defaults to 30s, matching kine's
+    /// `_busy_timeout=30000`. Lower it to exercise lock-contention handling.
+    pub busy_timeout: Duration,
 }
 
 impl Default for SqliteConfig {
@@ -50,6 +56,7 @@ impl Default for SqliteConfig {
             compact_min_retain: COMPACT_MIN_RETAIN,
             compact_batch_size: COMPACT_BATCH_SIZE,
             max_connections: 5,
+            busy_timeout: DEFAULT_BUSY_TIMEOUT,
         }
     }
 }
@@ -126,7 +133,7 @@ impl SqliteBackend {
             .journal_mode(SqliteJournalMode::Wal)
             .locking_mode(SqliteLockingMode::Normal)
             .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_secs(30))
+            .busy_timeout(config.busy_timeout)
             .pragma("cache_size", "-8000")
             .pragma("mmap_size", "268435456")
             .pragma("auto_vacuum", "incremental")
