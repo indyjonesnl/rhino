@@ -29,8 +29,20 @@ impl<B: Backend> Maintenance for KvBridge<B> {
             .await
             .map_err(backend_err_to_status)?;
 
+        // etcd fills Status.header.revision with the store's current revision
+        // (server/etcdserver/api/v3rpc/maintenance.go, Status -> header.fill);
+        // kine leaves it zero (pkg/server/maintenance.go:19-26).
+        let revision = self
+            .backend
+            .current_revision()
+            .await
+            .map_err(backend_err_to_status)?;
+
         Ok(Response::new(StatusResponse {
-            header: Some(ResponseHeader::default()),
+            header: Some(ResponseHeader {
+                revision,
+                ..Default::default()
+            }),
             version: self.emulated_etcd_version.clone(),
             db_size,
             ..Default::default()

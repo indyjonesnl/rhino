@@ -39,6 +39,12 @@ struct Args {
     /// Emulated etcd version string returned by the Status RPC
     #[arg(long, default_value = "3.5.13")]
     emulated_etcd_version: String,
+
+    /// Serve Prometheus compaction gauges (rhino_current_revision,
+    /// rhino_compact_revision, rhino_compaction_backlog) at /metrics on this
+    /// address, e.g. 0.0.0.0:2112. Empty (default) disables the endpoint.
+    #[arg(long, default_value = "")]
+    metrics_bind_address: String,
 }
 
 #[tokio::main]
@@ -66,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RhinoServer::new(backend)
             .with_notify_interval(notify_interval)
             .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+            .with_metrics_address(args.metrics_bind_address.clone())
             .serve(&args.listen_address)
             .await
     } else if args.endpoint.starts_with("redis://") || args.endpoint.starts_with("rediss://") {
@@ -79,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RhinoServer::new(backend)
             .with_notify_interval(notify_interval)
             .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+            .with_metrics_address(args.metrics_bind_address.clone())
             .serve(&args.listen_address)
             .await
     } else if args.endpoint.starts_with("mysql://") || args.endpoint.starts_with("mariadb://") {
@@ -93,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RhinoServer::new(backend)
             .with_notify_interval(notify_interval)
             .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+            .with_metrics_address(args.metrics_bind_address.clone())
             .serve(&args.listen_address)
             .await
     } else {
@@ -107,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RhinoServer::new(backend)
             .with_notify_interval(notify_interval)
             .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+            .with_metrics_address(args.metrics_bind_address.clone())
             .serve(&args.listen_address)
             .await
     }

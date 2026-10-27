@@ -12,6 +12,7 @@ pub mod proto {
 
 pub mod backend;
 pub mod drivers;
+pub mod metrics;
 pub mod server;
 
 pub use backend::{Backend, BackendError, Event, KeyValue, WatchResult};
