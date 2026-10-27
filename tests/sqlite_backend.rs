@@ -1150,3 +1150,63 @@ async fn test_current_revision_is_monotonic_under_concurrent_writers() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Configurable busy_timeout (#3877)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn busy_timeout_defaults_to_kine_30s() {
+    assert_eq!(
+        SqliteConfig::default().busy_timeout,
+        Duration::from_secs(30)
+    );
+}
+
+#[tokio::test]
+async fn busy_timeout_is_honoured_under_write_lock() {
+    use sqlx::ConnectOptions;
+    use sqlx::sqlite::SqliteConnectOptions;
+
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("busy.db");
+    let config = SqliteConfig {
+        dsn: db_path.to_string_lossy().to_string(),
+        compact_interval: Duration::ZERO,
+        busy_timeout: Duration::from_millis(100),
+        ..Default::default()
+    };
+    let backend = SqliteBackend::new(config).await.unwrap();
+    backend.start().await.unwrap();
+
+    // A second connection takes the WAL write lock and holds it.
+    let mut holder = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .connect()
+        .await
+        .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let res = backend.create("/registry/test/locked", b"v", 0).await;
+    let elapsed = started.elapsed();
+
+    let err = res.expect_err("write must fail while the lock is held");
+    assert!(
+        err.to_string().contains("database is locked"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "busy_timeout not honoured, waited {elapsed:?}"
+    );
+
+    sqlx::query("ROLLBACK").execute(&mut holder).await.unwrap();
+    backend
+        .create("/registry/test/locked", b"v", 0)
+        .await
+        .expect("write succeeds once the lock is released");
+}
