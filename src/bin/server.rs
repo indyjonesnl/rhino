@@ -59,7 +59,15 @@ struct Args {
 }
 
 #[tokio::main]
-#[allow(unused_variables)] // no backend feature enabled
+#[cfg_attr(
+    not(any(
+        feature = "sqlite",
+        feature = "postgres",
+        feature = "mysql",
+        feature = "redis"
+    )),
+    allow(unused_variables)
+)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -91,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return RhinoServer::new(backend)
                 .with_notify_interval(notify_interval)
                 .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+                .with_metrics_address(args.metrics_bind_address.clone())
                 .serve(&args.listen_address)
                 .await;
         }
@@ -111,6 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return RhinoServer::new(backend)
                 .with_notify_interval(notify_interval)
                 .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+                .with_metrics_address(args.metrics_bind_address.clone())
                 .serve(&args.listen_address)
                 .await;
         }
@@ -132,6 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return RhinoServer::new(backend)
                 .with_notify_interval(notify_interval)
                 .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+                .with_metrics_address(args.metrics_bind_address.clone())
                 .serve(&args.listen_address)
                 .await;
         }
@@ -152,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RhinoServer::new(backend)
             .with_notify_interval(notify_interval)
             .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+            .with_metrics_address(args.metrics_bind_address.clone())
             .serve(&args.listen_address)
             .await
     }
