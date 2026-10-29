@@ -1,3 +1,5 @@
+#![cfg(feature = "mysql")]
+
 //! MySQL backend integration tests.
 //!
 //! These tests require a running MySQL instance. Set the `RHINO_MYSQL_DSN`

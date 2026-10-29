@@ -18,22 +18,6 @@ postgres = ["dep:sqlx", "sqlx/postgres"]
 mysql = ["dep:sqlx", "sqlx/mysql"]
 redis = ["dep:redis"]
 
-[[test]]
-name = "mysql_backend"
-required-features = ["mysql"]
-
-[[test]]
-name = "postgres_backend"
-required-features = ["postgres"]
-
-[[test]]
-name = "redis_backend"
-required-features = ["redis"]
-
-[[test]]
-name = "sqlite_backend"
-required-features = ["sqlite"]
-
 [dependencies]
 async-stream = "0.3"
 async-trait = "0.1"

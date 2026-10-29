@@ -1,3 +1,5 @@
+#![cfg(feature = "postgres")]
+
 //! PostgreSQL backend integration tests.
 //!
 //! These tests require a running PostgreSQL instance. Set the `RHINO_POSTGRES_DSN`

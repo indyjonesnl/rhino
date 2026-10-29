@@ -1,3 +1,5 @@
+#![cfg(feature = "redis")]
+
 use rhino::{Backend, BackendError, RedisBackend, RedisConfig};
 use std::time::Duration;
 
