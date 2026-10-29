@@ -9,14 +9,39 @@ license = "Apache-2.0"
 name = "rhino-server"
 path = "src/bin/server.rs"
 
+[features]
+# Each backend is opt-in so downstream users only compile the drivers they use.
+# The default keeps the standalone rhino-server binary behaving as before.
+default = ["sqlite", "postgres", "mysql", "redis"]
+sqlite = ["dep:sqlx", "sqlx/sqlite"]
+postgres = ["dep:sqlx", "sqlx/postgres"]
+mysql = ["dep:sqlx", "sqlx/mysql"]
+redis = ["dep:redis"]
+
+[[test]]
+name = "mysql_backend"
+required-features = ["mysql"]
+
+[[test]]
+name = "postgres_backend"
+required-features = ["postgres"]
+
+[[test]]
+name = "redis_backend"
+required-features = ["redis"]
+
+[[test]]
+name = "sqlite_backend"
+required-features = ["sqlite"]
+
 [dependencies]
 async-stream = "0.3"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 futures-core = "0.3"
 prost = "0.13"
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "mysql"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio"], optional = true }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tonic = "0.12"

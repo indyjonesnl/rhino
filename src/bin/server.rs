@@ -1,8 +1,19 @@
 use clap::Parser;
-use rhino::{
-    MysqlBackend, MysqlConfig, PostgresBackend, PostgresConfig, RedisBackend, RedisConfig,
-    RhinoServer, SqliteBackend, SqliteConfig,
-};
+#[cfg(any(
+    feature = "sqlite",
+    feature = "postgres",
+    feature = "mysql",
+    feature = "redis"
+))]
+use rhino::RhinoServer;
+#[cfg(feature = "mysql")]
+use rhino::{MysqlBackend, MysqlConfig};
+#[cfg(feature = "postgres")]
+use rhino::{PostgresBackend, PostgresConfig};
+#[cfg(feature = "redis")]
+use rhino::{RedisBackend, RedisConfig};
+#[cfg(feature = "sqlite")]
+use rhino::{SqliteBackend, SqliteConfig};
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -48,6 +59,15 @@ struct Args {
 }
 
 #[tokio::main]
+#[cfg_attr(
+    not(any(
+        feature = "sqlite",
+        feature = "postgres",
+        feature = "mysql",
+        feature = "redis"
+    )),
+    allow(unused_variables)
+)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -60,51 +80,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let compact_interval = Duration::from_secs(args.compact_interval);
     let notify_interval = Duration::from_secs(args.watch_progress_notify_interval);
 
-    if args.endpoint.starts_with("postgres://") || args.endpoint.starts_with("postgresql://") {
-        let config = PostgresConfig {
-            dsn: args.endpoint,
-            compact_interval,
-            compact_min_retain: args.compact_retention,
-            max_connections: args.max_connections,
-            ..Default::default()
-        };
-        let backend = PostgresBackend::new(config).await?;
-        RhinoServer::new(backend)
-            .with_notify_interval(notify_interval)
-            .with_emulated_etcd_version(args.emulated_etcd_version.clone())
-            .with_metrics_address(args.metrics_bind_address.clone())
-            .serve(&args.listen_address)
-            .await
-    } else if args.endpoint.starts_with("redis://") || args.endpoint.starts_with("rediss://") {
-        let config = RedisConfig {
-            dsn: args.endpoint,
-            compact_interval,
-            compact_min_retain: args.compact_retention,
-            ..Default::default()
-        };
-        let backend = RedisBackend::new(config).await?;
-        RhinoServer::new(backend)
-            .with_notify_interval(notify_interval)
-            .with_emulated_etcd_version(args.emulated_etcd_version.clone())
-            .with_metrics_address(args.metrics_bind_address.clone())
-            .serve(&args.listen_address)
-            .await
-    } else if args.endpoint.starts_with("mysql://") || args.endpoint.starts_with("mariadb://") {
-        let config = MysqlConfig {
-            dsn: args.endpoint,
-            compact_interval,
-            compact_min_retain: args.compact_retention,
-            max_connections: args.max_connections,
-            ..Default::default()
-        };
-        let backend = MysqlBackend::new(config).await?;
-        RhinoServer::new(backend)
-            .with_notify_interval(notify_interval)
-            .with_emulated_etcd_version(args.emulated_etcd_version.clone())
-            .with_metrics_address(args.metrics_bind_address.clone())
-            .serve(&args.listen_address)
-            .await
-    } else {
+    let endpoint = args.endpoint.as_str();
+    let is_postgres = endpoint.starts_with("postgres://") || endpoint.starts_with("postgresql://");
+    let is_redis = endpoint.starts_with("redis://") || endpoint.starts_with("rediss://");
+    let is_mysql = endpoint.starts_with("mysql://") || endpoint.starts_with("mariadb://");
+
+    if is_postgres {
+        #[cfg(feature = "postgres")]
+        {
+            let config = PostgresConfig {
+                dsn: args.endpoint,
+                compact_interval,
+                compact_min_retain: args.compact_retention,
+                max_connections: args.max_connections,
+                ..Default::default()
+            };
+            let backend = PostgresBackend::new(config).await?;
+            return RhinoServer::new(backend)
+                .with_notify_interval(notify_interval)
+                .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+                .with_metrics_address(args.metrics_bind_address.clone())
+                .serve(&args.listen_address)
+                .await;
+        }
+        #[cfg(not(feature = "postgres"))]
+        return Err(not_compiled("postgres"));
+    }
+
+    if is_redis {
+        #[cfg(feature = "redis")]
+        {
+            let config = RedisConfig {
+                dsn: args.endpoint,
+                compact_interval,
+                compact_min_retain: args.compact_retention,
+                ..Default::default()
+            };
+            let backend = RedisBackend::new(config).await?;
+            return RhinoServer::new(backend)
+                .with_notify_interval(notify_interval)
+                .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+                .with_metrics_address(args.metrics_bind_address.clone())
+                .serve(&args.listen_address)
+                .await;
+        }
+        #[cfg(not(feature = "redis"))]
+        return Err(not_compiled("redis"));
+    }
+
+    if is_mysql {
+        #[cfg(feature = "mysql")]
+        {
+            let config = MysqlConfig {
+                dsn: args.endpoint,
+                compact_interval,
+                compact_min_retain: args.compact_retention,
+                max_connections: args.max_connections,
+                ..Default::default()
+            };
+            let backend = MysqlBackend::new(config).await?;
+            return RhinoServer::new(backend)
+                .with_notify_interval(notify_interval)
+                .with_emulated_etcd_version(args.emulated_etcd_version.clone())
+                .with_metrics_address(args.metrics_bind_address.clone())
+                .serve(&args.listen_address)
+                .await;
+        }
+        #[cfg(not(feature = "mysql"))]
+        return Err(not_compiled("mysql"));
+    }
+
+    #[cfg(feature = "sqlite")]
+    {
         let config = SqliteConfig {
             dsn: args.endpoint,
             compact_interval,
@@ -120,4 +167,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .serve(&args.listen_address)
             .await
     }
+    #[cfg(not(feature = "sqlite"))]
+    Err(not_compiled("sqlite"))
+}
+
+/// Runtime error for an endpoint whose backend was not compiled in.
+#[allow(dead_code)]
+fn not_compiled(backend: &str) -> Box<dyn std::error::Error> {
+    format!(
+        "the {backend} backend is not compiled into this rhino-server; \
+         rebuild with `--features {backend}`"
+    )
+    .into()
 }
