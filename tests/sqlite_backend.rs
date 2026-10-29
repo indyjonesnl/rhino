@@ -1,3 +1,5 @@
+#![cfg(feature = "sqlite")]
+
 use rhino::{Backend, BackendError, SqliteBackend, SqliteConfig};
 use std::time::Duration;
 use tempfile::TempDir;
